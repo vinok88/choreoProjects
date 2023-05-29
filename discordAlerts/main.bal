@@ -3,6 +3,7 @@ import ballerina/http;
 import ballerina/time;
 import ballerina/log;
 import ballerina/lang.runtime;
+import ballerinax/googleapis.gmail as gmail;
 
 configurable string botToken = ?;
 configurable int alert1 = 6;
@@ -15,16 +16,32 @@ configurable string escalationChatWebhookId = "/spaces/AAAApTEeg10/messages?key=
 configurable string serverId = "1108977085948637277";
 configurable string channelId = "1108977086674256026";
 configurable string discordWebUrl = "https://discord.com/channels";
+configurable string gmailRefreshToken = ?;
+configurable string gmailClientId = ?;
+configurable string gmailClientSecret = ?;
+configurable string gmailReceipent = ?;
+configurable string gmailSender = ?;
 
 type newMessage record {|
     json message;
     int alertLevel;
 |};
 
+gmail:ConnectionConfig gmailConfig = {
+    auth: {
+        refreshUrl: gmail:REFRESH_URL,
+        refreshToken: gmailRefreshToken,
+        clientId: gmailClientId,
+        clientSecret: gmailClientSecret
+    }
+};
+
 http:Client clientEndpoint = check new("https://discord.com/api");
 http:Client webhookClient = check new("https://chat.googleapis.com/v1");
+gmail:Client gmailClient = check new (gmailConfig);
 map<newMessage> noreplyList = {};
 string latestMessageId = "";
+
 
 public function main() returns error? {
     boolean continueLoop = true;
@@ -94,13 +111,15 @@ function sendAlerts() returns error? {
         if (alert3*60*60 <= delaySeconds) && (item.alertLevel == 3) {
             _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), escalationChatWebhookId);
             // we are not going to send alerts for this message anymore
+            io:println("Alert 3: " , author , " sent a message " , delaySeconds/60/60 , " hours ago");
             _ = noreplyList.remove(check item.message.id);
         } else if (alert2*60*60 <= delaySeconds) && (item.alertLevel == 2) {
             io:println("Alert 2: " , author , " sent a message " , delaySeconds/60/60 , " hours ago");
+            _ = check sendMail(getMessage(content, author, delaySeconds, id),id);
             item.alertLevel = 3;
             noreplyList[check item.message.id] = item;
         } else if (alert1*60*60 <= delaySeconds) && (item.alertLevel == 1) {
-            _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), alertsChatWebhookId);
+            _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), escalationChatWebhookId);
             item.alertLevel = 2;
             noreplyList[check item.message.id] = item;
         }
@@ -113,7 +132,7 @@ function getMessage(string content, string author, int delay, string messageId) 
         length = content.length();
     }
     string url = discordWebUrl + "/" + serverId + "/" + channelId + "/" + messageId;
-    string message = "[Alert] New message: " + content + "..., by: " + author + ", not answered for: " + (delay/60/60).toString() + " hours." + " Link: " + url;
+    string message = "New message: " + content + "..., by: " + author + ", not answered for: " + (delay/60/60).toString() + " hours." + " Link: " + url;
     log:printInfo(message);
     return message;
 }
@@ -130,4 +149,22 @@ function sendChatMessage(string message, string spaceId) returns error? {
     } 
     
     return;
+}
+
+function sendMail(string message, string messageId) returns error? {
+    string subject = "Escalation alert for discord message id: " + messageId;
+    gmail:MessageRequest messageRequest = {
+        recipient : gmailReceipent,
+        sender : gmailSender,
+        // cc : "cc@gmail.com",
+        subject : subject,
+        messageBody : message,
+        contentType : gmail:TEXT_PLAIN
+    };
+    gmail:Message|error response = gmailClient->sendMessage(messageRequest);
+
+    if response is error {
+        log:printError("Error sending email: ", response);
+        return response;
+    }
 }
