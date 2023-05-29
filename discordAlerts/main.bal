@@ -5,11 +5,16 @@ import ballerina/log;
 import ballerina/lang.runtime;
 
 configurable string botToken = ?;
-configurable int alert1 = 1;
+configurable int alert1 = 6;
 configurable int alert2 = 16;
-configurable int alert3 = 200;
-configurable int frequency = 1;
-string latestMessageId = "";
+configurable int alert3 = 20;
+configurable int frequency = 3;
+configurable int contentLength = 40;
+configurable string alertsChatWebhookId = "/spaces/AAAA2chLzm0/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=femuOHTxiMVO1nPba0TcYqRaGjlNLJfeyqlQZBWaa94";
+configurable string escalationChatWebhookId = "/spaces/AAAApTEeg10/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=NXry6cuwXhZvWOzV1BWrgQN7G4snDFDPH8pDHMy-1Jc";
+configurable string serverId = "1108977085948637277";
+configurable string channelId = "1108977086674256026";
+configurable string discordWebUrl = "https://discord.com/channels";
 
 type newMessage record {|
     json message;
@@ -17,10 +22,11 @@ type newMessage record {|
 |};
 
 http:Client clientEndpoint = check new("https://discord.com/api");
+http:Client webhookClient = check new("https://chat.googleapis.com/v1");
 map<newMessage> noreplyList = {};
+string latestMessageId = "";
 
 public function main() returns error? {
-
     boolean continueLoop = true;
     while continueLoop {
         error? result = sendAlerts();
@@ -39,7 +45,7 @@ function sendAlerts() returns error? {
     headers["Authorization"] =  "Bot " + botToken;
     string requestPath = "/channels/1108977086674256026/messages";
     if latestMessageId.length() > 0 {
-        io:println("lastMessageID:", latestMessageId);
+        log:printInfo("Starting checking messages after messageID: " + latestMessageId);
         requestPath = requestPath + "?after=" + latestMessageId;
     }
 
@@ -64,9 +70,7 @@ function sendAlerts() returns error? {
             // int? position = check message?.position;
             if !(referance is string) {
                 // this is a first message, add to list
-
                 noreplyList[check message.id] = {message: message, alertLevel: 1};
-                io:println("Added new message: " , check message.id , " : " , check message.content);
             } else {
                 // we have a referance, check if this is a reply to one of new messages
                 if (noreplyList.hasKey(referance)) {
@@ -84,12 +88,11 @@ function sendAlerts() returns error? {
         string content = check item.message.content;
         string author = check item.message.author?.username;
         string timestamp = check item.message.timestamp;
-        // "timestamp":"2023-05-23T04:06:29.385000+00:00"
-        // time:Time parsedTime = check time:parse("2021-02-28T23:10:15.02+05:30[Asia/Colombo]", time:ISO_8601);
+        string id = check item.message.id;
         time:Utc sentTime = check time:utcFromString(timestamp);
         int delaySeconds = now[0] - sentTime[0];
         if (alert3*60*60 <= delaySeconds) && (item.alertLevel == 3) {
-            io:println("Alert 3: " , author , " sent a message " , delaySeconds/60/60 , " hours ago");
+            _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), escalationChatWebhookId);
             // we are not going to send alerts for this message anymore
             _ = noreplyList.remove(check item.message.id);
         } else if (alert2*60*60 <= delaySeconds) && (item.alertLevel == 2) {
@@ -97,10 +100,34 @@ function sendAlerts() returns error? {
             item.alertLevel = 3;
             noreplyList[check item.message.id] = item;
         } else if (alert1*60*60 <= delaySeconds) && (item.alertLevel == 1) {
-            io:println("Alert 1: " , author , " sent a message " , delaySeconds/60/60 , " hours ago");
+            _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), alertsChatWebhookId);
             item.alertLevel = 2;
             noreplyList[check item.message.id] = item;
         }
     }
 }
 
+function getMessage(string content, string author, int delay, string messageId) returns string {
+    int length = contentLength;
+    if (content.length() < length) {
+        length = content.length();
+    }
+    string url = discordWebUrl + "/" + serverId + "/" + channelId + "/" + messageId;
+    string message = "[Alert] New message: " + content + "..., by: " + author + ", not answered for: " + (delay/60/60).toString() + " hours." + " Link: " + url;
+    log:printInfo(message);
+    return message;
+}
+
+
+function sendChatMessage(string message, string spaceId) returns error? {
+    map<string> headers = {};
+    headers["Content-Type"] = "application/json";
+    json payload = {text: message};
+    http:Response|error response = check webhookClient->post(spaceId, payload, headers);
+    if (response is error) {
+        log:printError("Error sending message to chat space: ", response);
+        return response;
+    } 
+    
+    return;
+}
