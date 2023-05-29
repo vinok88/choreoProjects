@@ -5,22 +5,25 @@ import ballerina/log;
 import ballerina/lang.runtime;
 import ballerinax/googleapis.gmail as gmail;
 
-configurable string botToken = ?;
 configurable int alert1 = 6;
 configurable int alert2 = 16;
 configurable int alert3 = 20;
-configurable int frequency = 3;
+configurable int frequency = 15;
 configurable int contentLength = 40;
-configurable string alertsChatWebhookId = "/spaces/AAAA2chLzm0/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=femuOHTxiMVO1nPba0TcYqRaGjlNLJfeyqlQZBWaa94";
-configurable string escalationChatWebhookId = "/spaces/AAAApTEeg10/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=NXry6cuwXhZvWOzV1BWrgQN7G4snDFDPH8pDHMy-1Jc";
-configurable string serverId = "1108977085948637277";
-configurable string channelId = "1108977086674256026";
+configurable string botToken = ?;
+configurable string serverId = ?;
+configurable string channelId = ?;
 configurable string discordWebUrl = "https://discord.com/channels";
-configurable string gmailRefreshToken = ?;
-configurable string gmailClientId = ?;
-configurable string gmailClientSecret = ?;
+configurable string discordAPIUrl = "https://discord.com/api";
+configurable string alertsChatWebhookId = ?;
+configurable string escalationChatWebhookId = ?;
+configurable string googleRefreshToken = ?;
+configurable string googleClientId = ?;
+configurable string googleClientSecret = ?;
 configurable string gmailReceipent = ?;
 configurable string gmailSender = ?;
+configurable string googleChatAPIUrl = "https://chat.googleapis.com/v1";
+
 
 type newMessage record {|
     json message;
@@ -30,14 +33,14 @@ type newMessage record {|
 gmail:ConnectionConfig gmailConfig = {
     auth: {
         refreshUrl: gmail:REFRESH_URL,
-        refreshToken: gmailRefreshToken,
-        clientId: gmailClientId,
-        clientSecret: gmailClientSecret
+        refreshToken: googleRefreshToken,
+        clientId: googleClientId,
+        clientSecret: googleClientSecret
     }
 };
 
-http:Client clientEndpoint = check new("https://discord.com/api");
-http:Client webhookClient = check new("https://chat.googleapis.com/v1");
+http:Client clientEndpoint = check new(discordAPIUrl);
+http:Client webhookClient = check new(googleChatAPIUrl);
 gmail:Client gmailClient = check new (gmailConfig);
 map<newMessage> noreplyList = {};
 string latestMessageId = "";
@@ -60,16 +63,18 @@ public function main() returns error? {
 function sendAlerts() returns error? {
     map<string> headers = {};
     headers["Authorization"] =  "Bot " + botToken;
-    string requestPath = "/channels/1108977086674256026/messages";
+    string requestPath = "/channels/" + channelId + "/messages";
     if latestMessageId.length() > 0 {
         log:printInfo("Starting checking messages after messageID: " + latestMessageId);
         requestPath = requestPath + "?after=" + latestMessageId;
+    } else {
+        log:printInfo("Starting checking latest messages.");
     }
 
     json|error response = check clientEndpoint->get(requestPath, headers);
 
     if (response is error) {
-        io:println(response.message());
+        log:printError("Error getting Discord messages", response);
         return;
     }
     
@@ -93,12 +98,12 @@ function sendAlerts() returns error? {
                 if (noreplyList.hasKey(referance)) {
                     // this is a reply to a new message
                     _ = noreplyList.remove(referance);
-                    io:println("Removed reply: " , referance , " : " , check message.content);
                 }
             }
         }
     }
 
+    
     time:Utc now = time:utcNow();
     // now send notification for each item in the list
     foreach json item in noreplyList  {
@@ -115,11 +120,11 @@ function sendAlerts() returns error? {
             _ = noreplyList.remove(check item.message.id);
         } else if (alert2*60*60 <= delaySeconds) && (item.alertLevel == 2) {
             io:println("Alert 2: " , author , " sent a message " , delaySeconds/60/60 , " hours ago");
-            _ = check sendMail(getMessage(content, author, delaySeconds, id),id);
+            _ = check sendMail(getEmailMessage(content, author, delaySeconds, id),id);
             item.alertLevel = 3;
             noreplyList[check item.message.id] = item;
         } else if (alert1*60*60 <= delaySeconds) && (item.alertLevel == 1) {
-            _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), escalationChatWebhookId);
+            _ = check sendChatMessage(getMessage(content, author, delaySeconds, id), alertsChatWebhookId);
             item.alertLevel = 2;
             noreplyList[check item.message.id] = item;
         }
@@ -133,8 +138,18 @@ function getMessage(string content, string author, int delay, string messageId) 
     }
     string url = discordWebUrl + "/" + serverId + "/" + channelId + "/" + messageId;
     string message = "New message: " + content + "..., by: " + author + ", not answered for: " + (delay/60/60).toString() + " hours." + " Link: " + url;
-    log:printInfo(message);
+    log:printDebug(message);
     return message;
+}
+
+function getEmailMessage(string content, string author, int delay, string messageId) returns string {
+    string url = discordWebUrl + "/" + serverId + "/" + channelId + "/" + messageId;
+    string msg = content;
+    if content.length() > 100 {
+        msg = content.substring(0, 100);
+    }
+    return "Following message on discord channel is not answered for over " + (delay/60/60).toString() 
+        + " hours." + "\n" + "Author: " + author +"\n" + "Link: " + url + "\n" + "Message: " + msg; 
 }
 
 
@@ -152,7 +167,7 @@ function sendChatMessage(string message, string spaceId) returns error? {
 }
 
 function sendMail(string message, string messageId) returns error? {
-    string subject = "Escalation alert for discord message id: " + messageId;
+    string subject = "Escalation alert for un-answered discord message id: " + messageId;
     gmail:MessageRequest messageRequest = {
         recipient : gmailReceipent,
         sender : gmailSender,
