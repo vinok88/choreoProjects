@@ -52,11 +52,7 @@ public function main() returns error? {
     while continueLoop {
         error? result = sendAlerts();
         if result is error {
-            log:printError("Error: ", result);
-            if !continueOnError {
-                continueLoop = false;
-                log:printInfo("Terminating Discord Alert program.");
-            }
+            return result;
         }
         runtime:sleep(frequency*60);
     }
@@ -67,6 +63,7 @@ function sendAlerts() returns error? {
     map<string> headers = {};
     headers["Authorization"] =  "Bot " + botToken;
     string requestPath = "/channels/" + channelId + "/messages";
+
     if latestMessageId.length() > 0 {
         log:printInfo("Starting checking messages after messageID: " + latestMessageId);
         requestPath = requestPath + "?after=" + latestMessageId;
@@ -92,16 +89,24 @@ function sendAlerts() returns error? {
             // need to start with the oldest message, hence popping from the end
             json message = response.pop();
             string? referance = check message?.referenced_message?.id;
-            // int? position = check message?.position;
-            if !(referance is string) {
-                // this is a first message, add to list
-                noreplyList[check message.id] = {message: message, alertLevel: 1};
-            } else {
+            int messageType = check message.'type;
+            
+            if referance is string {
                 // we have a referance, check if this is a reply to one of new messages
                 if (noreplyList.hasKey(referance)) {
                     // this is a reply to a new message
                     _ = noreplyList.remove(referance);
                 }
+            } else if (messageType == 32){
+                // this is a new thread creation
+                string threadRef = check message.message_reference.channel_id;
+                if (noreplyList.hasKey(threadRef)) {
+                    // this is a thread creation to a new message
+                    _ = noreplyList.remove(threadRef);
+                }
+            } else {
+                // this is a first message, add to list
+                noreplyList[check message.id] = {message: message, alertLevel: 1};
             }
         }
     }
