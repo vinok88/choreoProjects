@@ -23,6 +23,7 @@ configurable string googleClientSecret = ?;
 configurable string gmailReceipent = ?;
 configurable string gmailSender = ?;
 configurable string googleChatAPIUrl = "https://chat.googleapis.com/v1";
+configurable boolean continueOnError = true;
 
 
 type newMessage record {|
@@ -51,9 +52,11 @@ public function main() returns error? {
     while continueLoop {
         error? result = sendAlerts();
         if result is error {
-            continueLoop = false;
             log:printError("Error: ", result);
-            log:printInfo("Terminating Discord Alert program.");
+            if !continueOnError {
+                continueLoop = false;
+                log:printInfo("Terminating Discord Alert program.");
+            }
         }
         runtime:sleep(frequency*60);
     }
